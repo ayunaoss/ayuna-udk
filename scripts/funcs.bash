@@ -47,17 +47,25 @@ init_runtimes() {
     ## Rust/cargo configuration
     [ -d "${HOME}/.cargo" ] && source "${HOME}/.cargo/env"
 
+    ## Bun runtime configuration
+    if [ -d "${HOME}/.bun" ]; then
+        export BUN_INSTALL="$HOME/.bun"
+        export PATH="$BUN_INSTALL/bin:$PATH"
+    fi
+
+    ## Nodejs pnpm configuration
+    if [ -d "${HOME}/.local/share/pnpm" ]; then
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        case ":$PATH:" in
+        *":$PNPM_HOME:"*) ;;
+        *) export PATH="$PNPM_HOME:$PATH" ;;
+        esac
+    fi
+
     ##Opencode configuration
     if [ -d "${HOME}/.opencode" ]; then
         export PATH=${HOME}/.opencode/bin:$PATH
     fi
-
-    ## Nodejs pnpm configuration
-    export PNPM_HOME="${HOME}/.local/share/pnpm"
-    case ":$PATH:" in
-    *":$PNPM_HOME:"*) ;;
-    *) export PATH="$PNPM_HOME:$PATH" ;;
-    esac
 }
 
 ## Array to string conversion with given separator
