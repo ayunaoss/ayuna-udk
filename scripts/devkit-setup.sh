@@ -3,24 +3,24 @@ set -eu
 
 ## Get the current script dir
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-source ${SCRIPT_DIR}/funcs.bash
+source "${SCRIPT_DIR}/funcs.bash"
 
 ## Check for devkit setup tools
 check_devkit_tools
 
 ## Check for atleast two arguments
 if [[ $# -lt 2 ]]; then
-    echo_error "Usage: $(basename $0) --kit=<devkit> --version=<version> [--force=true|false]"
+    echo_error "Usage: $(basename "$0") --kit=<devkit> --version=<version> [--force=true|false]"
     exit 1
 fi
 
 CACHE_DIR="${HOME}/.udk/cache"
 UDK_DIST="${HOME}/.udk/dist"
 
-mkdir -p $CACHE_DIR $UDK_DIST
+mkdir -p "${CACHE_DIR}" "${UDK_DIST}"
 
 _valid_cached_file() {
-    filename=$1
+    local filename=$1
 
     ## Check if the file is already cached and is not older than 30 days
     if [ -f "${CACHE_DIR}/${filename}" ]; then
@@ -29,7 +29,7 @@ _valid_cached_file() {
         local time_diff=$((current_time - last_modified))
         local days_diff=$((time_diff / 86400))
 
-        if [ $days_diff -lt 15 ]; then
+        if ((days_diff < 15)); then
             echo_info "Found already cached file $filename."
             return 0
         else
@@ -41,42 +41,200 @@ _valid_cached_file() {
     return 1
 }
 
+_linux_family() {
+    local distro_id=""
+    local distro_like=""
+
+    if [ -f /etc/os-release ]; then
+        distro_id=$(source /etc/os-release && echo "${ID:-}")
+        distro_like=$(source /etc/os-release && echo "${ID_LIKE:-}")
+    fi
+
+    case "${distro_id} ${distro_like}" in
+    *debian* | *ubuntu*)
+        echo "debian"
+        ;;
+    *fedora* | *rhel* | *centos* | *rocky* | *almalinux*)
+        echo "fedora"
+        ;;
+    *)
+        echo "unknown"
+        ;;
+    esac
+}
+
 _setup_pydev_packages() {
-    sudo apt-get update
-    sudo apt-get upgrade -y
+    case "$(_linux_family)" in
+    debian)
+        sudo apt-get update
+        sudo apt-get upgrade -y
 
-    sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        dpkg-dev \
-        gcc \
-        git \
-        libbluetooth-dev \
-        libbz2-dev \
-        libc6-dev \
-        libdb-dev \
-        libffi-dev \
-        libgdbm-dev \
-        libkrb5-dev \
-        liblzma-dev \
-        libncursesw5-dev \
-        libreadline-dev \
-        libsqlite3-dev \
-        libssl-dev \
-        libzstd-dev \
-        make \
-        netbase \
-        tk-dev \
-        tzdata \
-        uuid-dev \
-        wget \
-        xz-utils \
-        zlib1g-dev && sync
+        sudo apt-get install -y \
+            apt-transport-https \
+            ca-certificates \
+            dpkg-dev \
+            gcc \
+            git \
+            libbluetooth-dev \
+            libbz2-dev \
+            libc6-dev \
+            libdb-dev \
+            libffi-dev \
+            libgdbm-dev \
+            libkrb5-dev \
+            liblzma-dev \
+            libncursesw5-dev \
+            libreadline-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libzstd-dev \
+            make \
+            netbase \
+            tk-dev \
+            tzdata \
+            uuid-dev \
+            wget \
+            xz-utils \
+            zlib1g-dev && sync
 
-    sudo apt-get clean -y
-    sudo apt-get autoremove --purge -y
-    sudo dpkg --configure -a
-    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+        sudo apt-get clean -y
+        sudo apt-get autoremove --purge -y
+        sudo dpkg --configure -a
+        sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+        ;;
+    fedora)
+        sudo dnf -y upgrade
+        sudo dnf install -y \
+            ca-certificates \
+            gcc \
+            git \
+            redhat-rpm-config \
+            bluez-libs-devel \
+            bzip2-devel \
+            glibc-devel \
+            libdb-devel \
+            libffi-devel \
+            gdbm-devel \
+            krb5-devel \
+            xz-devel \
+            ncurses-devel \
+            readline-devel \
+            sqlite-devel \
+            openssl-devel \
+            libzstd-devel \
+            make \
+            tk-devel \
+            tzdata \
+            libuuid-devel \
+            wget \
+            xz \
+            zlib-devel && sync
+
+        sudo dnf clean all
+        ;;
+    *)
+        echo_error "Unsupported Linux distribution. This script supports Debian/Ubuntu and Fedora/RHEL families."
+        return 1
+        ;;
+    esac
+}
+
+_install_pipx() {
+    case "$(_linux_family)" in
+    debian)
+        sudo apt-get update && sudo apt-get install -y pipx
+        ;;
+    fedora)
+        sudo dnf install -y pipx
+        ;;
+    *)
+        echo_error "Unsupported Linux distribution for pipx installation."
+        return 1
+        ;;
+    esac
+}
+
+_build_gnu_arch() {
+    case "$(_linux_family)" in
+    debian)
+        dpkg-architecture --query DEB_BUILD_GNU_TYPE
+        ;;
+    fedora)
+        gcc -dumpmachine
+        ;;
+    *)
+        echo ""
+        ;;
+    esac
+}
+
+_build_cflags() {
+    local flags=""
+
+    case "$(_linux_family)" in
+    debian)
+        flags="$(dpkg-buildflags --get CFLAGS 2>/dev/null || true)"
+        printf '%s\n' "${flags}"
+        ;;
+    fedora)
+        flags="$(rpm --eval '%{build_cflags}' 2>/dev/null || true)"
+        if [[ -z "${flags}" || "${flags}" == *"%{"* ]]; then
+            flags="${CFLAGS:-}"
+        fi
+        printf '%s\n' "${flags}"
+        ;;
+    *)
+        echo ""
+        ;;
+    esac
+}
+
+_build_ldflags() {
+    local flags=""
+
+    case "$(_linux_family)" in
+    debian)
+        flags="$(dpkg-buildflags --get LDFLAGS 2>/dev/null || true)"
+        printf '%s\n' "${flags}"
+        ;;
+    fedora)
+        flags="$(rpm --eval '%{build_ldflags}' 2>/dev/null || true)"
+        if [[ -z "${flags}" || "${flags}" == *"%{"* ]]; then
+            flags="${LDFLAGS:-}"
+        fi
+        printf '%s\n' "${flags}"
+        ;;
+    *)
+        echo ""
+        ;;
+    esac
+}
+
+_host_arch() {
+    case "$(_linux_family)" in
+    debian)
+        dpkg --print-architecture
+        ;;
+    fedora)
+        case "$(uname -m)" in
+        x86_64)
+            echo "amd64"
+            ;;
+        aarch64 | arm64)
+            echo "arm64"
+            ;;
+        i386 | i686)
+            echo "i386"
+            ;;
+        *)
+            uname -m
+            ;;
+        esac
+        ;;
+    *)
+        uname -m
+        ;;
+    esac
 }
 
 _install_python() {
@@ -85,12 +243,12 @@ _install_python() {
 
     if [ -z "$(command -v pipx 2>/dev/null)" ]; then
         echo_info "The pipx tool is needed to install sigstore for signature verification. Installing pipx..."
-        sudo apt update && sudo apt install -y pipx
+        _install_pipx
         pipx ensurepath
     fi
 
     ## Verify python source tarball using sigstore
-    local sigstore_info=$(sigstore_info_for_pyver $version)
+    local sigstore_info=$(sigstore_info_for_pyver "$version")
 
     if [ -z "$sigstore_info" ]; then
         echo_error "Sigstore verification information not found for Python version ${version}."
@@ -100,10 +258,11 @@ _install_python() {
     echo_info "Installing sigstore verification package..."
     pipx install --force sigstore
 
-    local pkg_bname=$(basename $pkgfile)
-    local pkg_base=$(tar_xz_pkgbase $pkgfile)
+    local pkg_bname=$(basename "$pkgfile")
     local python_dir="${UDK_DIST}/py-${version}"
     local tmpdir=$(mktemp -d --suffix=-src)
+    local cert_identity="${sigstore_info%%|*}"
+    local cert_oidc_issuer="${sigstore_info#*|}"
 
     local python_bin="${python_dir}/bin"
     local python_lib="${python_dir}/lib"
@@ -117,10 +276,10 @@ _install_python() {
     }
 
     local verify_result=$(pipx run sigstore verify identity \
-        --bundle ${tmpdir}/${pkg_bname}.sigstore \
-        --cert-identity $(echo "$sigstore_info" | cut -d '|' -f1) \
-        --cert-oidc-issuer $(echo "$sigstore_info" | cut -d '|' -f2) \
-        ${pkgfile} 2>&1)
+        --bundle "${tmpdir}/${pkg_bname}.sigstore" \
+        --cert-identity "${cert_identity}" \
+        --cert-oidc-issuer "${cert_oidc_issuer}" \
+        "${pkgfile}" 2>&1)
 
     if [[ -n "$(echo "$verify_result" | grep -E "^OK: .*${pkg_bname//./\\.}$" | grep -v 'grep')" ]]; then
         echo_info "Sigstore verification succeeded for Python ${version} source package."
@@ -134,11 +293,11 @@ _install_python() {
     echo_info "Installing Python ${version}..."
     _setup_pydev_packages
 
-    mkdir -p ${tmpdir}/python
-    tar --extract --directory ${tmpdir}/python --strip-components=1 --file ${pkgfile} && sync
-    cd ${tmpdir}/python
+    mkdir -p "${tmpdir}/python"
+    tar --extract --directory "${tmpdir}/python" --strip-components=1 --file "${pkgfile}" && sync
+    cd "${tmpdir}/python"
 
-    gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"
+    gnuArch="$(_build_gnu_arch)"
     ./configure \
         --build="$gnuArch" \
         --enable-loadable-sqlite-extensions \
@@ -147,13 +306,13 @@ _install_python() {
         --enable-shared \
         $(test "${gnuArch%%-*}" != 'riscv64' && echo '--with-lto') \
         --with-ensurepip \
-        --prefix=${python_dir}
+        --prefix="${python_dir}"
 
-    EXTRA_CFLAGS="$(dpkg-buildflags --get CFLAGS)"
-    LDFLAGS="$(dpkg-buildflags --get LDFLAGS)"
+    EXTRA_CFLAGS="$(_build_cflags)"
+    LDFLAGS="$(_build_ldflags)"
     LDFLAGS="${LDFLAGS:-} -Wl,--strip-all"
 
-    arch="$(dpkg --print-architecture)"
+    arch="$(_host_arch)"
     arch="${arch##*-}"
     # https://docs.python.org/3.12/howto/perf_profiling.html
     # https://github.com/docker-library/python/pull/1000#issuecomment-2597021615
@@ -177,18 +336,18 @@ _install_python() {
         "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}" \
         "LDFLAGS=${LDFLAGS:-}"
 
-    sync && rm python
+    sync && rm -f python
     make -j "$(nproc)" \
         "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}" \
         "LDFLAGS=${LDFLAGS:-} -Wl,-rpath='\$\$ORIGIN/../lib'" \
         python
 
     sync && make install && sync
-    cd -
+    cd - >/dev/null
 
     rm -rf "${tmpdir}"
 
-    find ${python_dir} -depth \
+    find "${python_dir}" -depth \
         \( \
         \( -type d -a \( -name test -o -name tests -o -name idle_test \) \) \
         -o \( -type f -a \( -name '*.pyc' -o -name '*.pyo' -o -name 'libpython*.a' \) \) \
@@ -197,8 +356,8 @@ _install_python() {
 
     if [ -d "${python_bin}" ] && [ -d "${python_lib}" ] && [ -d "${python_inc}" ]; then
         export PATH="${python_bin}:${PATH}"
-        export LD_LIBRARY_PATH="${python_lib}:${LD_LIBRARY_PATH}"
-        export PKG_CONFIG_PATH="${python_lib}/pkgconfig:${PKG_CONFIG_PATH}"
+        export LD_LIBRARY_PATH="${python_lib}:${LD_LIBRARY_PATH:-}"
+        export PKG_CONFIG_PATH="${python_lib}/pkgconfig:${PKG_CONFIG_PATH:-}"
         export PYTHONDONTWRITEBYTECODE=1
 
         python3 --version
@@ -228,7 +387,7 @@ _install_openjdk() {
     local pkgfile=$1
     local version=$2
 
-    local pkg_base=$(tar_gz_pkgbase $pkgfile)
+    local pkg_base=$(tar_gz_pkgbase "$pkgfile")
     local jdk_dir="${UDK_DIST}/jdk-${version}"
 
     local jdk_bin="${jdk_dir}/bin"
@@ -254,7 +413,7 @@ _install_nodejs() {
     local pkgfile=$1
     local version=$2
 
-    local pkg_base=$(tar_pkgbase $pkgfile)
+    local pkg_base=$(tar_pkgbase "$pkgfile")
     local node_dir="${UDK_DIST}/node-${version}"
 
     local node_bin="${node_dir}/bin"
@@ -280,7 +439,7 @@ _install_golang() {
     local pkgfile=$1
     local version=$2
 
-    local pkg_base=$(tar_gz_pkgbase $pkgfile)
+    local pkg_base=$(tar_gz_pkgbase "$pkgfile")
     local go_dir="${UDK_DIST}/go-${version}"
 
     local go_bin="${go_dir}/bin"
@@ -294,7 +453,7 @@ _install_golang() {
     fi
 
     if [ -d "${go_bin}" ] && [ -d "${go_lib}" ]; then
-        mkdir -p ${UDK_DIST}/goext
+        mkdir -p "${UDK_DIST}/goext"
         echo_info "Go ${version} is installed successfully."
     else
         echo_error "Failed to install Go ${version}."
@@ -306,7 +465,7 @@ _install_gradle() {
     local pkgfile=$1
     local version=$2
 
-    local pkg_base=$(zip_pkgbase $pkgfile)
+    local pkg_base=$(zip_pkgbase "$pkgfile")
     local gradle_dir="${UDK_DIST}/gradle-${version}"
 
     local gradle_bin="${gradle_dir}/bin"
@@ -331,7 +490,7 @@ _install_maven() {
     local pkgfile=$1
     local version=$2
 
-    local pkg_base=$(zip_pkgbase $pkgfile)
+    local pkg_base=$(zip_pkgbase "$pkgfile")
     local maven_dir="${UDK_DIST}/mvn-${version}"
 
     local maven_bin="${maven_dir}/bin"
@@ -704,26 +863,26 @@ setup_maven() {
 setup_devkit() {
     local devkit=$1
     local version=$2
-    local force=${3:-false}
+    local force="${3:-false}"
 
     case "$devkit" in
     python)
-        setup_python $version $force
+        setup_python "$version" "$force"
         ;;
     openjdk)
-        setup_openjdk $version $force
+        setup_openjdk "$version" "$force"
         ;;
     nodejs)
-        setup_nodejs $version $force
+        setup_nodejs "$version" "$force"
         ;;
     golang)
-        setup_golang $version $force
+        setup_golang "$version" "$force"
         ;;
     gradle)
-        setup_gradle $version $force
+        setup_gradle "$version" "$force"
         ;;
     maven)
-        setup_maven $version $force
+        setup_maven "$version" "$force"
         ;;
     *)
         echo_error "Unknown devkit: $devkit.\nSupported devkits: python, openjdk, nodejs, golang, gradle, maven"
@@ -771,9 +930,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $FORCE == "true" ]]; then
-    setup_devkit $KIT_NAME $KIT_VERSION true
+    setup_devkit "$KIT_NAME" "$KIT_VERSION" true
 else
-    setup_devkit $KIT_NAME $KIT_VERSION
+    setup_devkit "$KIT_NAME" "$KIT_VERSION"
 fi
 
 sync && echo "DevKit setup done."
